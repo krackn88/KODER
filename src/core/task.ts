@@ -4,6 +4,13 @@ import * as crypto from 'crypto';
 import { MemoryManager } from './memory';
 import { AzureClient } from '../services/azure';
 import { TerminalManager } from '../integrations/terminal/terminal-manager';
+import { 
+  AutoApprovalSettings, 
+  DEFAULT_AUTO_APPROVAL_SETTINGS, 
+  ActionUsageTracker,
+  isCommandSafe,
+  isFileExtensionSafe
+} from './auto-approval';
 
 export interface TaskMetadata {
   id: string;
@@ -30,11 +37,16 @@ export class Task {
   public terminalManager: TerminalManager;
   private terminalOutputs: Map<string, string> = new Map();
   
+  // Auto-approval settings
+  public autoApprovalSettings: AutoApprovalSettings;
+  private usageTracker: ActionUsageTracker;
+  
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly memoryManager: MemoryManager,
     private readonly outputChannel: vscode.OutputChannel,
-    initialPrompt?: string
+    initialPrompt?: string,
+    autoApprovalSettings?: AutoApprovalSettings
   ) {
     // Generate a unique ID for this task
     this.id = crypto.randomUUID();
@@ -43,6 +55,14 @@ export class Task {
     this.messages = [];
     this.isStreaming = false;
     this.isComplete = false;
+    
+    // Set auto-approval settings
+    this.autoApprovalSettings = autoApprovalSettings || 
+      this.loadAutoApprovalSettings() || 
+      DEFAULT_AUTO_APPROVAL_SETTINGS;
+      
+    // Initialize usage tracker
+    this.usageTracker = new ActionUsageTracker();
     
     // Initialize Azure client
     this.api = new AzureClient();
@@ -62,6 +82,21 @@ export class Task {
     if (initialPrompt) {
       this.addMessage('user', initialPrompt);
     }
+  }
+  
+  /**
+   * Load auto-approval settings from global state
+   */
+  private loadAutoApprovalSettings(): AutoApprovalSettings | undefined {
+    const settings = this.context.globalState.get<AutoApprovalSettings>('autoApprovalSettings');
+    return settings;
+  }
+  
+  /**
+   * Save auto-approval settings to global state
+   */
+  private async saveAutoApprovalSettings(): Promise<void> {
+    await this.context.globalState.update('autoApprovalSettings', this.autoApprovalSettings);
   }
   
   /**
@@ -125,14 +160,32 @@ export class Task {
   public async executeCommand(
     command: string,
     terminalName: string = 'KODER',
-    waitForUserApproval: boolean = true
+    forceApproval: boolean = false
   ): Promise<string> {
+    // Check if we've hit the terminal command limit
+    if (!this.usageTracker.canExecuteTerminalCommand(this.autoApprovalSettings)) {
+      return `Error: Maximum number of terminal commands (${this.autoApprovalSettings.maximumTerminalCommands}) reached for this session.`;
+    }
+    
+    // Check if session duration limit has been reached
+    if (!this.usageTracker.isSessionWithinTimeLimit(this.autoApprovalSettings)) {
+      return `Error: Maximum session duration (${this.autoApprovalSettings.maximumSessionDuration} minutes) reached.`;
+    }
+    
+    // Determine if the command needs approval
+    const isCommandInSafeList = isCommandSafe(command, this.autoApprovalSettings.safeTerminalCommands);
+    const needsApproval = !forceApproval && 
+                          !(this.autoApprovalSettings.autoApproveTerminalCommands && isCommandInSafeList);
+    
     // Execute the command
     const result = await this.terminalManager.executeCommand(
       terminalName,
       command,
-      waitForUserApproval
+      needsApproval
     );
+    
+    // Record the usage
+    this.usageTracker.recordTerminalCommand();
     
     // Record the result in messages
     this.addMessage(
@@ -171,8 +224,24 @@ export class Task {
   public async editFile(
     filePath: string,
     newContent: string,
-    waitForUserApproval: boolean = true
+    forceApproval: boolean = false
   ): Promise<boolean> {
+    // Check if we've hit the file operation limit
+    if (!this.usageTracker.canPerformFileOperation(this.autoApprovalSettings)) {
+      vscode.window.showErrorMessage(
+        `Maximum number of file operations (${this.autoApprovalSettings.maximumFileOperations}) reached for this session.`
+      );
+      return false;
+    }
+    
+    // Check if session duration limit has been reached
+    if (!this.usageTracker.isSessionWithinTimeLimit(this.autoApprovalSettings)) {
+      vscode.window.showErrorMessage(
+        `Maximum session duration (${this.autoApprovalSettings.maximumSessionDuration} minutes) reached.`
+      );
+      return false;
+    }
+    
     // Use the workspace folder as the base directory
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -184,9 +253,32 @@ export class Task {
     try {
       // Check if file already exists
       let document: vscode.TextDocument;
+      let isNewFile = false;
+      
       try {
         document = await vscode.workspace.openTextDocument(fullPath);
       } catch {
+        // File doesn't exist, this will be a creation
+        isNewFile = true;
+        
+        // Determine if the file creation needs approval
+        const isExtensionSafe = isFileExtensionSafe(filePath, this.autoApprovalSettings.safeFileExtensions);
+        const needsApproval = !forceApproval && 
+                              !(this.autoApprovalSettings.autoApproveFileCreation && isExtensionSafe);
+        
+        if (needsApproval) {
+          const action = await vscode.window.showInformationMessage(
+            `KODER wants to create a new file: ${filePath}`,
+            { modal: true },
+            'Create',
+            'Cancel'
+          );
+          
+          if (action !== 'Create') {
+            return false;
+          }
+        }
+        
         // Create a new file
         const fileUri = vscode.Uri.file(fullPath);
         const newFileContent = Buffer.from(newContent, 'utf8');
@@ -199,10 +291,13 @@ export class Task {
           `Created file ${filePath}`
         );
         
+        // Record the file operation
+        this.usageTracker.recordFileOperation();
+        
         return true;
       }
       
-      // File exists, so we need to edit it
+      // File exists, so this is an edit
       const oldContent = document.getText();
       
       if (oldContent === newContent) {
@@ -210,7 +305,12 @@ export class Task {
         return true;
       }
       
-      if (waitForUserApproval) {
+      // Determine if the file edit needs approval
+      const isExtensionSafe = isFileExtensionSafe(filePath, this.autoApprovalSettings.safeFileExtensions);
+      const needsApproval = !forceApproval && 
+                           !(this.autoApprovalSettings.autoApproveFileEdits && isExtensionSafe);
+      
+      if (needsApproval) {
         // Create a diff and ask for approval
         const diffUri = this.createDiffUri(filePath, oldContent, newContent);
         
@@ -247,6 +347,9 @@ export class Task {
           'system',
           `Edited file ${filePath}`
         );
+        
+        // Record the file operation
+        this.usageTracker.recordFileOperation();
       }
       
       return success;
@@ -269,7 +372,7 @@ export class Task {
     
     // Create a URI for the diff view
     return vscode.Uri.parse(
-      `diff:${filePath}?${encodedOldContent}`,
+      `koder-diff:${filePath}?${encodedOldContent}`,
       true
     );
   }
@@ -297,6 +400,20 @@ export class Task {
       acceptButtonText,
       cancelButtonText
     );
+  }
+  
+  /**
+   * Record an API call
+   */
+  public recordApiCall(tokensUsed: number): void {
+    this.usageTracker.recordApiCall(tokensUsed);
+  }
+  
+  /**
+   * Get current usage statistics
+   */
+  public getUsageStats(): any {
+    return this.usageTracker.getUsageStats();
   }
   
   /**
