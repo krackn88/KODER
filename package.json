@@ -16,6 +16,24 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "koder-sidebar",
+          "title": "KODER",
+          "icon": "assets/icons/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "koder-sidebar": [
+        {
+          "type": "webview",
+          "id": "koder.autoApprovalSettings",
+          "name": "Auto-Approval Settings"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "koder.start",
@@ -36,6 +54,10 @@
       {
         "command": "koder.addTerminalOutputToChat",
         "title": "KODER: Add Terminal Output to Chat"
+      },
+      {
+        "command": "koder.openAutoApprovalSettings",
+        "title": "KODER: Open Auto-Approval Settings"
       }
     ],
     "menus": {
@@ -65,11 +87,6 @@
           "type": "string",
           "default": "",
           "description": "Path to memory storage (leave empty for default)"
-        },
-        "koder.autoApproveTerminalCommands": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically approve terminal commands (use with caution)"
         }
       }
     }
