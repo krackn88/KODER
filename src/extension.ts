@@ -7,6 +7,8 @@ import { Task } from './core/task';
 import { AzureClient } from './services/azure';
 import { VSCodeIntegration } from './vscode/integration';
 import { DiffViewProvider, DIFF_VIEW_URI_SCHEME } from './integrations/editor/diff-view-provider';
+import { AutoApprovalSettingsProvider } from './webviews/auto-approval-settings';
+import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from './core/auto-approval';
 
 // Load environment variables
 dotenv.config();
@@ -15,6 +17,11 @@ export async function activate(context: vscode.ExtensionContext) {
   console.log('KODER is now active!');
   const outputChannel = vscode.window.createOutputChannel("KODER");
   context.subscriptions.push(outputChannel);
+  
+  // Initialize auto-approval settings if they don't exist
+  if (!context.globalState.get<AutoApprovalSettings>('autoApprovalSettings')) {
+    await context.globalState.update('autoApprovalSettings', DEFAULT_AUTO_APPROVAL_SETTINGS);
+  }
   
   try {
     // Initialize services
@@ -30,6 +37,18 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.workspace.registerTextDocumentContentProvider(
         DIFF_VIEW_URI_SCHEME,
         diffViewProvider
+      )
+    );
+    
+    // Register the auto-approval settings webview
+    const autoApprovalSettingsProvider = new AutoApprovalSettingsProvider(
+      context.extensionUri,
+      context
+    );
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        AutoApprovalSettingsProvider.viewType,
+        autoApprovalSettingsProvider
       )
     );
 
@@ -82,8 +101,9 @@ export async function activate(context: vscode.ExtensionContext) {
         
         if (command) {
           // Create a task for this command
+          const autoApprovalSettings = context.globalState.get<AutoApprovalSettings>('autoApprovalSettings');
           const task = new Task(context, memoryManager, outputChannel, 
-            `Execute command: ${command}`);
+            `Execute command: ${command}`, autoApprovalSettings);
           
           // Execute the command
           await task.executeCommand(command);
@@ -108,7 +128,9 @@ export async function activate(context: vscode.ExtensionContext) {
           const activeTerminal = terminals[0];
           
           // Create a temporary task to handle the terminal
-          const task = new Task(context, memoryManager, outputChannel);
+          const autoApprovalSettings = context.globalState.get<AutoApprovalSettings>('autoApprovalSettings');
+          const task = new Task(context, memoryManager, outputChannel, 
+            undefined, autoApprovalSettings);
           
           // Get the terminal history
           const history = task.terminalManager.getTerminalHistory(activeTerminal.name);
@@ -132,7 +154,9 @@ export async function activate(context: vscode.ExtensionContext) {
             const terminal = terminals.find(t => t.name === selectedTerminal);
             if (terminal) {
               // Create a temporary task to handle the terminal
-              const task = new Task(context, memoryManager, outputChannel);
+              const autoApprovalSettings = context.globalState.get<AutoApprovalSettings>('autoApprovalSettings');
+              const task = new Task(context, memoryManager, outputChannel, 
+                undefined, autoApprovalSettings);
               
               // Get the terminal history
               const history = task.terminalManager.getTerminalHistory(terminal.name);
@@ -148,6 +172,13 @@ export async function activate(context: vscode.ExtensionContext) {
             }
           }
         }
+      })
+    );
+    
+    // Register command to open auto-approval settings
+    context.subscriptions.push(
+      vscode.commands.registerCommand('koder.openAutoApprovalSettings', async () => {
+        vscode.commands.executeCommand('workbench.view.extension.koder-auto-approval-settings');
       })
     );
 
