@@ -1,0 +1,56 @@
+# Dependency directories
+node_modules/
+dist/
+out/
+
+# Environment variables
+.env
+.env.local
+
+# Build output
+build/
+*.vsix
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Cache directories
+.npm
+.eslintcache
+.vscode-test/
+
+# Python cache (if using Python components)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Coverage directories
+coverage/
+.nyc_output/
+
+# IDE configs
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# SQLite database
+app.db
+
+# Memory cache
+.koder-cache/
