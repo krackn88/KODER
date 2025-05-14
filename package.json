@@ -28,8 +28,31 @@
       {
         "command": "koder.ask",
         "title": "KODER: Ask a Question"
+      },
+      {
+        "command": "koder.executeCommand",
+        "title": "KODER: Execute Terminal Command"
+      },
+      {
+        "command": "koder.addTerminalOutputToChat",
+        "title": "KODER: Add Terminal Output to Chat"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "koder.ask",
+          "when": "editorHasSelection",
+          "group": "navigation"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "koder.addTerminalOutputToChat",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "KODER",
       "properties": {
@@ -42,6 +65,11 @@
           "type": "string",
           "default": "",
           "description": "Path to memory storage (leave empty for default)"
+        },
+        "koder.autoApproveTerminalCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically approve terminal commands (use with caution)"
         }
       }
     }
