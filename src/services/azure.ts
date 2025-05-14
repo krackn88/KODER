@@ -77,6 +77,12 @@ export class AzureClient {
         id: 'metadata',
         partitionKey: { paths: ["/id"] }
       });
+      
+      // Add tasks container
+      await database.containers.createIfNotExists({
+        id: 'tasks',
+        partitionKey: { paths: ["/id"] }
+      });
 
       console.log('Azure resources initialized successfully');
     } catch (error) {
@@ -118,6 +124,20 @@ export class AzureClient {
     const container = this.cosmosClient.database(this.databaseName).container(containerName);
     await container.items.upsert(document);
   }
+  
+  public async deleteDocument(containerName: string, documentId: string): Promise<void> {
+    try {
+      const container = this.cosmosClient.database(this.databaseName).container(containerName);
+      const { resource: doc } = await container.item(documentId, documentId).read();
+      
+      if (doc) {
+        await container.item(documentId, documentId).delete();
+      }
+    } catch (error) {
+      console.error(`Failed to delete document ${documentId} from ${containerName}:`, error);
+      throw error;
+    }
+  }
 
   public async queryDocuments(containerName: string, querySpec: any): Promise<any[]> {
     try {
@@ -158,6 +178,37 @@ export class AzureClient {
     } catch (error) {
       console.error('Failed to get AI response:', error);
       return `Error: ${error}`;
+    }
+  }
+  
+  /**
+   * Creates a streamed AI chat response
+   * @param prompt The user prompt
+   * @param context Previous context messages
+   * @returns An async generator of response chunks
+   */
+  public async *createStreamedResponse(prompt: string, context: string[] = []): AsyncGenerator<string> {
+    try {
+      const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_GPT4O || '';
+      
+      const stream = await this.openAIClient.streamChatCompletions(
+        deployment,
+        [
+          { role: 'system', content: 'You are a helpful pair programming assistant that understands code context and provides helpful suggestions.' },
+          ...context.map(c => ({ role: 'user' as const, content: c })),
+          { role: 'user', content: prompt }
+        ],
+        { temperature: 0.7, maxTokens: 4000 }
+      );
+      
+      for await (const chunk of stream) {
+        if (chunk.choices && chunk.choices.length > 0 && chunk.choices[0].delta?.content) {
+          yield chunk.choices[0].delta.content;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to get streamed AI response:', error);
+      yield `Error: ${error}`;
     }
   }
 }
